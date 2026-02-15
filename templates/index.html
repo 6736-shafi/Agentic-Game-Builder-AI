@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agentic Game-Builder AI</title>
+    <meta name="description" content="AI agent that generates playable HTML5 games from natural-language descriptions.">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎮</text></svg>">
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<div class="header">
+    <h1>Agentic Game-Builder AI</h1>
+    <div class="phases">
+        <span class="phase active" id="phase1">1 &middot; Clarify</span>
+        <span class="phase" id="phase2">2 &middot; Plan</span>
+        <span class="phase" id="phase3">3 &middot; Build</span>
+    </div>
+</div>
+
+<div class="chat-container" id="chat">
+    <div class="welcome" id="welcome">
+        <span class="welcome-icon">🎮</span>
+        <h2>Build a Game with AI</h2>
+        <p>Describe any game idea and I'll clarify the requirements, design a plan, and generate a fully playable HTML5 game.</p>
+        <div class="examples">
+            <span class="example-chip" onclick="useExample(this)">A snake game with power-ups</span>
+            <span class="example-chip" onclick="useExample(this)">Space shooter with boss fights</span>
+            <span class="example-chip" onclick="useExample(this)">2D platformer with coins</span>
+            <span class="example-chip" onclick="useExample(this)">Pong with AI opponent</span>
+        </div>
+    </div>
+</div>
+
+<div class="loading" id="loading">
+    <div class="spinner"></div>
+    <div class="loading-text" id="loading-text">Thinking...</div>
+</div>
+
+<div class="preview-section" id="preview">
+    <h2>Your Game is Ready!</h2>
+    <iframe id="game-frame" sandbox="allow-scripts allow-same-origin"></iframe>
+    <div class="preview-actions">
+        <a id="download-link" href="#">⬇ Download Game Files</a>
+        <button onclick="location.reload()">🔄 Build Another Game</button>
+    </div>
+</div>
+
+<div class="input-area" id="input-area">
+    <div class="input-row">
+        <input type="text" id="user-input" placeholder="Describe your game idea..." autofocus>
+        <button id="send-btn" onclick="send()">Send</button>
+    </div>
+</div>
+
+<script>
+const chat = document.getElementById('chat');
+const input = document.getElementById('user-input');
+const sendBtn = document.getElementById('send-btn');
+const loading = document.getElementById('loading');
+const loadingText = document.getElementById('loading-text');
+const inputArea = document.getElementById('input-area');
+const preview = document.getElementById('preview');
+const welcome = document.getElementById('welcome');
+
+let sessionId = null;
+let gameIdea = null;
+let phase = 'idle'; // idle | clarify | building | done
+
+input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !sendBtn.disabled) send();
+});
+
+function useExample(chip) {
+    input.value = chip.textContent;
+    input.focus();
+}
+
+function formatMessage(text) {
+    // Simple markdown-like formatting for agent messages
+    let html = text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em>$1</em>')
+        .replace(/`(.*?)`/g, '<code>$1</code>')
+        .replace(/^[-•]\s+(.+)$/gm, '<span style="display:block;padding-left:16px;">• $1</span>')
+        .replace(/^\d+\.\s+(.+)$/gm, (match, p1, offset, str) => {
+            return '<span style="display:block;padding-left:16px;">' + match.substring(0, match.indexOf(' ')) + ' ' + p1 + '</span>';
+        });
+    return html;
+}
+
+function addMessage(text, role) {
+    // Remove welcome on first message
+    if (welcome) {
+        welcome.remove();
+    }
+
+    const div = document.createElement('div');
+    div.className = `message ${role}`;
+    const label = document.createElement('div');
+    label.className = 'label';
+    label.textContent = role === 'user' ? 'You' : 'Agent';
+    const bubble = document.createElement('div');
+    bubble.className = 'bubble';
+
+    if (role === 'agent') {
+        bubble.innerHTML = formatMessage(text);
+    } else {
+        bubble.textContent = text;
+    }
+
+    div.appendChild(label);
+    div.appendChild(bubble);
+    chat.appendChild(div);
+    chat.scrollTop = chat.scrollHeight;
+}
+
+function setPhase(n) {
+    for (let i = 1; i <= 3; i++) {
+        const el = document.getElementById('phase' + i);
+        el.classList.remove('active', 'done');
+        if (i < n) el.classList.add('done');
+        else if (i === n) el.classList.add('active');
+    }
+}
+
+function showLoading(text) {
+    loadingText.textContent = text;
+    loading.classList.add('visible');
+}
+
+function hideLoading() {
+    loading.classList.remove('visible');
+}
+
+function disableInput(disabled) {
+    input.disabled = disabled;
+    sendBtn.disabled = disabled;
+}
+
+async function send() {
+    const text = input.value.trim();
+    if (!text) return;
+
+    addMessage(text, 'user');
+    input.value = '';
+    disableInput(true);
+
+    if (phase === 'idle') {
+        gameIdea = text;
+        phase = 'clarify';
+        showLoading('Starting requirements clarification...');
+
+        try {
+            const res = await fetch('/api/start', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ game_idea: text })
+            });
+            const data = await res.json();
+            sessionId = data.session_id;
+            hideLoading();
+
+            addMessage(data.response, 'agent');
+
+            if (data.is_clear) {
+                await startBuild();
+            } else {
+                disableInput(false);
+                input.placeholder = 'Answer the questions...';
+                input.focus();
+            }
+        } catch (err) {
+            hideLoading();
+            addMessage('Error: ' + err.message, 'agent');
+            disableInput(false);
+        }
+
+    } else if (phase === 'clarify') {
+        showLoading('Thinking...');
+
+        try {
+            const res = await fetch('/api/message', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_id: sessionId, message: text })
+            });
+            const data = await res.json();
+            hideLoading();
+
+            addMessage(data.response, 'agent');
+
+            if (data.is_clear) {
+                await startBuild();
+            } else {
+                disableInput(false);
+                input.focus();
+            }
+        } catch (err) {
+            hideLoading();
+            addMessage('Error: ' + err.message, 'agent');
+            disableInput(false);
+        }
+    }
+}
+
+async function startBuild() {
+    phase = 'building';
+    inputArea.style.display = 'none';
+
+    setPhase(2);
+    showLoading('Designing game plan...');
+    addMessage('Requirements are clear! Now planning and building your game — this may take a minute...', 'agent');
+
+    try {
+        const res = await fetch('/api/build', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: sessionId })
+        });
+        const data = await res.json();
+
+        if (data.error) {
+            hideLoading();
+            addMessage('Build error: ' + data.error, 'agent');
+            return;
+        }
+
+        setPhase(3);
+        hideLoading();
+        phase = 'done';
+
+        addMessage('🎉 Game built successfully! Title: **' + (data.title || 'Your Game') + '**\n\nYou can play it below or download the files.', 'agent');
+
+        // Show preview
+        const gameFrame = document.getElementById('game-frame');
+        gameFrame.src = '/api/preview/' + sessionId + '/index.html';
+
+        const downloadLink = document.getElementById('download-link');
+        downloadLink.href = '/api/download/' + sessionId;
+
+        preview.classList.add('visible');
+
+    } catch (err) {
+        hideLoading();
+        addMessage('Build error: ' + err.message, 'agent');
+    }
+}
+</script>
+
+</body>
+</html>

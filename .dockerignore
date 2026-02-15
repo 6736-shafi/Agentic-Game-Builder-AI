@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+output/
+.env
+.git/
+.gitignore
+.claude/
+.gemini/
+*.md
+!README.md
